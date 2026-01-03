@@ -45,3 +45,6 @@ clean:
 	@touch $(TARGET) $(OBJ)
 	rm -f $(TARGET) $(OBJ)
 	rm -rf $(DOCSBASE)
+
+run: all
+	./zpic

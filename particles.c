@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
+#include <mpi.h>
 #include <stdio.h>
 
 #include "particles.h"
@@ -885,18 +886,6 @@ void interpolate_fld( const float3* restrict const E, const float3* restrict con
 
 }
 
-/**
- * @brief Returns number of cells moved
- * 
- * Note that the particle will move at most 1 cell in either direction
- * 
- * @param x         End particle position, normalized to cell size
- * @return ltrim    Number of cells moved, {-1,0,1}
- */
-int ltrim( float x )
-{
-    return ( x >= 1.0f ) - ( x < 0.0f );
-}
 
 /**
  * @brief Advance Particle species 1 timestep
@@ -916,7 +905,7 @@ int ltrim( float x )
  * @param emf       EM fields
  * @param current   Current density
  */
-void spec_advance( t_species* spec, t_emf* emf, t_current* current )
+void spec_advance( t_species* spec, t_emf* emf, t_current* current, int argc, char * argv[] )
 {
 
     uint64_t t0;
@@ -931,9 +920,14 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current )
     const int nx0 = spec -> nx;
 
     double energy = 0;
-
+    double energysum = 0;
+    int rank, size;
+    MPI_Status status;
+    MPI_Init(0, []);
+    MPI_Comm_rank( MPI_COMM_WORLD, &rank );
+    MPI_Comm_size( MPI_COMM_WORLD, &size ); 
     // Advance particles
-    for (int i=0; i<spec->np; i++) {
+    for (int i=rank; i<spec->np; i+=size) {
 
         float3 Ep, Bp;
         float utx, uty, utz;
@@ -1010,7 +1004,7 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current )
 
         x1 = spec -> part[i].x + dx;
 
-        di = ltrim(x1);
+        di = ( x1 >= 1.0f ) - ( x1 < 0.0f );
 
         x1 -= di;
 
@@ -1024,15 +1018,25 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current )
         // 				 current );
 
         dep_current_zamb( spec -> part[i].ix, di,
-                         spec -> part[i].x, dx,
-                         qnx, qvy, qvz,
-                         current );
+                            spec -> part[i].x, dx,
+                            qnx, qvy, qvz,
+                            current );
 
         // Store results
         spec -> part[i].x = x1;
         spec -> part[i].ix += di;
-
+        energysum += energy;
     }
+    if(rank == 0){
+        energy = energysum;
+        for(int i=1;i<=size;i++){
+            MPI_Recv( &energysum, 1, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &status );
+            energy += energysum;
+        }
+    }else{
+        MPI_Send( &energysum, 1, MPI_DOUBLE, rank+1, 0, MPI_COMM_WORLD);
+    }
+    MPI_Finalize();
 
     // Store energy
     spec -> energy = spec-> q * spec -> m_q * energy * spec -> dx;
