@@ -46,7 +46,7 @@ void sim_iter( t_simulation* sim, int argc, char * argv[] ) {
 	// Advance particles and deposit current
 	current_zero( &sim -> current );
 	for (int i = 0; i<sim -> n_species; i++)
-		spec_advance(&sim -> species[i], &sim -> emf, &sim -> current ,  argc, argv);
+		spec_advance(&sim -> species[i], &sim -> emf, &sim -> current ,  argc, **argv);
 
 	// Update current boundary conditions and advance iteration
 	current_update( &sim -> current );
