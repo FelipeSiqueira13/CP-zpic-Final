@@ -905,7 +905,7 @@ void interpolate_fld( const float3* restrict const E, const float3* restrict con
  * @param emf       EM fields
  * @param current   Current density
  */
-void spec_advance( t_species* spec, t_emf* emf, t_current* current, int *argc, const char *** argv)
+void spec_advance( t_species* spec, t_emf* emf, t_current* current, int *argc, char *** argv)
 {
 
     uint64_t t0;
