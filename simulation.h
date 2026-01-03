@@ -56,7 +56,7 @@ void sim_report( t_simulation* sim );
  * 
  * @param sim 	EM1D Simulation
  */
-void sim_iter( t_simulation* sim, int argc, char * argv[]  );
+void sim_iter( t_simulation* sim);
 
 /**
  * @brief Print report on simulation energy (fields/particles/total)
