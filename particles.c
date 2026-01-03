@@ -905,7 +905,7 @@ void interpolate_fld( const float3* restrict const E, const float3* restrict con
  * @param emf       EM fields
  * @param current   Current density
  */
-void spec_advance( t_species* spec, t_emf* emf, t_current* current)
+void spec_advance( t_species* spec, t_emf* emf, t_current* current, int *argc, char ** argv[] )
 {
 
     uint64_t t0;
@@ -923,7 +923,7 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
     double energysum = 0;
     int rank, size;
     MPI_Status status;
-    MPI_Init(NULL, NULL);
+    MPI_Init(argc, argv);
     MPI_Comm_rank( MPI_COMM_WORLD, &rank );
     MPI_Comm_size( MPI_COMM_WORLD, &size ); 
     // Advance particles

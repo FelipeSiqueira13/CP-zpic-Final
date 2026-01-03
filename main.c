@@ -61,7 +61,7 @@ int main (int argc, const char * argv[]) {
 
 		if ( report ( n , sim.ndump ) )	sim_report( &sim );
 
-		sim_iter( &sim );
+		sim_iter( &sim, &argc, &argv );
 
         if (n==0){
             sim_report_energy_ret( &sim, &en_in);
