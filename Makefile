@@ -1,5 +1,5 @@
-# GCC options
-CC = gcc
+# MPI-capable compiler (falls back to mpicc)
+CC = mpicc
 CFLAGS = -Ofast -g -std=c99 -pedantic -Wall
 #CFLAGS = -Kfast -std=c99 
 LDFLAGS = -lm

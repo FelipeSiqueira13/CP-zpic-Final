@@ -12,8 +12,8 @@
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
-#include <mpi.h>
 #include <stdio.h>
+#include <mpi.h>
 
 #include "particles.h"
 
@@ -905,11 +905,16 @@ void interpolate_fld( const float3* restrict const E, const float3* restrict con
  * @param emf       EM fields
  * @param current   Current density
  */
-void spec_advance( t_species* spec, t_emf* emf, t_current* current, int *argc, char *** argv)
+void spec_advance( t_species* spec, t_emf* emf, t_current* current)
 {
 
     uint64_t t0;
     t0 = timer_ticks();
+
+    int rank = 0;
+    int size = 1;
+    MPI_Comm_rank( MPI_COMM_WORLD, &rank );
+    MPI_Comm_size( MPI_COMM_WORLD, &size );
 
     const float tem   = 0.5 * spec->dt/spec -> m_q;
     const float dt_dx = spec->dt / spec->dx;
@@ -919,13 +924,7 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current, int *argc, c
 
     const int nx0 = spec -> nx;
 
-    double energy = 0;
-    double energysum = 0;
-    int rank, size;
-    MPI_Status status;
-    MPI_Init(argc, argv);
-    MPI_Comm_rank( MPI_COMM_WORLD, &rank );
-    MPI_Comm_size( MPI_COMM_WORLD, &size ); 
+    double energy = 0.0;
     // Advance particles
     for (int i=rank; i<spec->np; i+=size) {
 
@@ -1025,21 +1024,24 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current, int *argc, c
         // Store results
         spec -> part[i].x = x1;
         spec -> part[i].ix += di;
-        energysum += energy;
     }
-    if(rank == 0){
-        energy = energysum;
-        for(int i=1;i<=size;i++){
-            MPI_Recv( &energysum, 1, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &status );
-            energy += energysum;
-        }
-    }else{
-        MPI_Send( &energysum, 1, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
+
+    // Combine energy across ranks
+    double energy_total = 0.0;
+    MPI_Allreduce( &energy, &energy_total, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD );
+
+    // Combine deposited current across ranks so all processes carry the same grid values
+    if (size > 1) {
+        const int cells = current->gc[0] + current->nx + current->gc[1];
+        const int count = cells * 3; // x,y,z per cell
+        float *tmp = (float *) malloc( count * sizeof(float) );
+        MPI_Allreduce( (float *) current->J_buf, tmp, count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD );
+        memcpy( current->J_buf, tmp, count * sizeof(float) );
+        free( tmp );
     }
-    MPI_Finalize();
 
     // Store energy
-    spec -> energy = spec-> q * spec -> m_q * energy * spec -> dx;
+    spec -> energy = spec-> q * spec -> m_q * energy_total * spec -> dx;
 
     // Advance internal iteration number
     spec -> iter += 1;

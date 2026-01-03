@@ -191,7 +191,7 @@ void spec_grow_buffer( t_species* spec, const int size );
  * @param emf       EM fields
  * @param current   Current density
  */
-void spec_advance( t_species* spec, t_emf* emf, t_current* current, int *argc, char *** argv );
+void spec_advance( t_species* spec, t_emf* emf, t_current* current );
 
 /**
  * @brief Returns the total time spent pushing particles (includes boundaries and moving window)

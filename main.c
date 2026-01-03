@@ -41,9 +41,11 @@ along with the ZPIC Educational code suite. If not, see <http://www.gnu.org/lice
 
 int main (int argc, char * argv[]) {
 
-	// Initialize simulation
-	t_simulation sim;
-	sim_init( &sim );
+    // Initialize MPI and simulation
+    MPI_Init( &argc, &argv );
+
+    t_simulation sim;
+    sim_init( &sim );
 
     // Run simulation
 	int n;
@@ -61,7 +63,7 @@ int main (int argc, char * argv[]) {
 
 		if ( report ( n , sim.ndump ) )	sim_report( &sim );
 
-		sim_iter( &sim, &argc, &argv );
+		sim_iter( &sim );
 
         if (n==0){
             sim_report_energy_ret( &sim, &en_in);
@@ -85,6 +87,8 @@ int main (int argc, char * argv[]) {
 
     // Cleanup data
     sim_delete( &sim );
-    
-	return 0;
+
+    MPI_Finalize();
+	
+    return 0;
 }
