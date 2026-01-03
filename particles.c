@@ -923,7 +923,7 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
     double energysum = 0;
     int rank, size;
     MPI_Status status;
-    MPI_Init(&argc, &argv);
+    MPI_Init(NULL, NULL);
     MPI_Comm_rank( MPI_COMM_WORLD, &rank );
     MPI_Comm_size( MPI_COMM_WORLD, &size ); 
     // Advance particles
@@ -1034,7 +1034,7 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
             energy += energysum;
         }
     }else{
-        MPI_Send( &energysum, 1, MPI_DOUBLE, rank+1, 0, MPI_COMM_WORLD);
+        MPI_Send( &energysum, 1, MPI_DOUBLE, size-1, 0, MPI_COMM_WORLD);
     }
     MPI_Finalize();
 
