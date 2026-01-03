@@ -21,7 +21,7 @@ along with the ZPIC Educational code suite. If not, see <http://www.gnu.org/lice
 #include <stdlib.h>
 
 #include <math.h>
-
+#include <mpi.h>
 #include "zpic.h"
 #include "simulation.h"
 #include "emf.h"
