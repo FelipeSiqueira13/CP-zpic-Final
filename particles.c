@@ -1034,7 +1034,7 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
             energy += energysum;
         }
     }else{
-        MPI_Send( &energysum, 1, MPI_DOUBLE, size-1, 0, MPI_COMM_WORLD);
+        MPI_Send( &energysum, 1, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
     }
     MPI_Finalize();
 
