@@ -1,5 +1,5 @@
 # GCC options
-CC = gcc
+CC = mpicc
 CFLAGS = -Ofast -g -std=c99 -pedantic -Wall
 #CFLAGS = -Kfast -std=c99 
 LDFLAGS = -lm
@@ -28,6 +28,9 @@ DOCS = $(DOCSBASE)/html/index.html
 
 OBJ = $(SOURCE:.c=.o)
 
+# Number of MPI processes for the run target (override with `make run NP=<n>`)
+NP ?= 4
+
 all : $(SOURCE) $(TARGET)
 
 docs : $(DOCS)
@@ -47,4 +50,4 @@ clean:
 	rm -rf $(DOCSBASE)
 
 run: all
-	./zpic
+	mpirun -np $(NP) ./zpic
