@@ -959,8 +959,7 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
     t_part *local_part = (local_n > 0) ? malloc(local_n * sizeof(t_part)) : NULL;
 
     // Scatter particles (root sends, others receive)
-    MPI_Scatterv((rank == 0) ? spec->part : NULL, counts, displs, mpi_part,
-                 local_part, local_n, mpi_part, 0, MPI_COMM_WORLD);
+    MPI_Scatterv(spec->part, counts, displs, mpi_part, local_part, local_n, mpi_part, 0, MPI_COMM_WORLD);
 
     // Broadcast field buffers (contiguous float3 arrays)
     int emf_cells = emf->nx + emf->gc[0] + emf->gc[1];
@@ -1046,6 +1045,7 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
         uz = utz + Ep.z;
 
         // Store new momenta
+        //datarace
         p->ux = ux;
         p->uy = uy;
         p->uz = uz;
@@ -1069,14 +1069,14 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
         // 				 spec -> part[i].x, x1,
         // 				 qnx, qvy, qvz,
         // 				 current );
-        //Felipe Current
+        //datarace Current
         dep_current_zamb( p->ix, di,
                     p->x, dx,
                             qnx, qvy, qvz,
                             current );
 
         // Store results
-        //Felipe
+        //datarace
         p->x = x1;
         p->ix += di;
     }
@@ -1090,8 +1090,7 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
     MPI_Allreduce(MPI_IN_PLACE, current->J_buf, jlen, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
 
     // Gather particles back to root
-    MPI_Gatherv(local_part, local_n, mpi_part,
-                (rank == 0) ? spec->part : NULL, counts, displs, mpi_part, 0, MPI_COMM_WORLD);
+    MPI_Gatherv(local_part, local_n, mpi_part, spec->part , counts, displs, mpi_part, 0, MPI_COMM_WORLD);
 
     // Root finalizes bookkeeping
     if (rank == 0) {
