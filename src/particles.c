@@ -570,40 +570,22 @@ void spec_new( t_species* spec, char name[], const float m_q, const int ppc,
     spec -> moving_window = 0;
     spec -> n_move = 0;
 
-    // Initialize MPI spatial decomposition info BEFORE particle injection
+    // Inject initial particle distribution
+    spec -> np = 0;
+
+    const int range[2] = {0, nx-1};
+
+    spec_inject_particles( spec, range );
+
+    // Initialize MPI info (not used for true spatial decomposition yet)
     int rank = 0, size = 1;
     MPI_Comm_rank( MPI_COMM_WORLD, &rank );
     MPI_Comm_size( MPI_COMM_WORLD, &size );
 
-    // Divide domain equally among ranks
-    spec->rank_nx = nx / size;
-    int remainder = nx % size;
-    if (rank < remainder) spec->rank_nx++;
-    
-    // Calculate starting position for this rank
+    spec->rank_nx = nx;
     spec->rank_start = 0;
-    for (int r = 0; r < rank; r++) {
-        int r_nx = nx / size;
-        if (r < remainder) r_nx++;
-        spec->rank_start += r_nx;
-    }
-
-    // Set neighbor ranks
-    spec->rank_left = (rank > 0) ? rank - 1 : -1;
-    spec->rank_right = (rank < size - 1) ? rank + 1 : -1;
-
-    // Inject initial particle distribution in LOCAL domain only
-    spec -> np = 0;
-
-    // Each rank injects only in its local domain (in global coordinates)
-    const int range[2] = {spec->rank_start, spec->rank_start + spec->rank_nx - 1};
-
-    spec_inject_particles( spec, range );
-
-    // Convert particle positions to local coordinates (relative to rank domain)
-    for (int i = 0; i < spec->np; i++) {
-        spec->part[i].ix -= spec->rank_start;
-    }
+    spec->rank_left = -1;
+    spec->rank_right = -1;
 
     // Set default sorting frequency
     spec -> n_sort = 100000;
@@ -917,21 +899,13 @@ void interpolate_fld( const float3* restrict const E, const float3* restrict con
 
 
 /**
- * @brief Advance Particle species 1 timestep
+ * @brief Advance Particle species 1 timestep with improved MPI
  * 
- * Particles are advanced in time using a leap-frog method; the velocity
- * advance is done using a relativistic Boris pusher. Particle motion is
- * used to deposit electric current on the grid using an exact charge
- * conservation method.
- * 
- * The routine will also:
- * 1. Calculate total time-centered kinetic energy for the Species
- * 2. Apply boundary conditions
- * 3. Move simulation window
- * 4. Sort particle buffer
+ * Uses vector partitioning (scatter/gather) but with explicit current reduction
+ * to maintain better energy conservation across ranks.
  * 
  * @param spec      Particle species
- * @param emf       EM fields
+ * @param emf       EM fields  
  * @param current   Current density
  */
 void spec_advance( t_species* spec, t_emf* emf, t_current* current)
@@ -940,18 +914,16 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
     uint64_t t0;
     t0 = timer_ticks();
 
-    // Guarantee MPI initialized once
-
     int rank = 0, size = 1;
     MPI_Comm_rank( MPI_COMM_WORLD, &rank );
     MPI_Comm_size( MPI_COMM_WORLD, &size );
 
-    /* Debug flag controlled by env var MPI_DEBUG=1; must be consistent across ranks */
+    /* Debug flag */
     int dbg_local = 1;
     int dbg = 1;
     MPI_Allreduce(&dbg_local, &dbg, 1, MPI_INT, MPI_LOR, MPI_COMM_WORLD);
 
-    // Datatype for particle (contiguous fields only)
+    // Datatype for particle
     MPI_Datatype mpi_part;
     int blocklen[5] = {1,1,1,1,1};
     MPI_Aint disp[5];
@@ -965,41 +937,67 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
     MPI_Type_commit(&mpi_part);
 
     if (dbg && rank == 0) {
-        fprintf(stderr, "[MPI spatial] iter=%d size=%d\n", spec->iter, size);
+        fprintf(stderr, "[MPI improved] iter=%d size=%d np=%d\n", spec->iter, size, spec->np);
     }
 
+    // Broadcast state
+    int np_root = spec->np;
+    MPI_Bcast(&np_root, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&spec->iter, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&spec->n_move, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+    if (rank != 0) {
+        spec_grow_buffer(spec, np_root);
+        spec->np = np_root;
+    }
+
+    // Partition particles
+    int base = np_root / size;
+    int rem = np_root % size;
+    int local_n = base + ((rank < rem) ? 1 : 0);
+
+    int *counts = malloc(size * sizeof(int));
+    int *displs = malloc(size * sizeof(int));
+    displs[0] = 0;
+    for (int r = 0; r < size; r++) {
+        counts[r] = base + ((r < rem) ? 1 : 0);
+        if (r > 0) displs[r] = displs[r-1] + counts[r-1];
+    }
+
+    t_part *local_part = (local_n > 0) ? malloc(local_n * sizeof(t_part)) : NULL;
+
+    MPI_Scatterv(spec->part, counts, displs, mpi_part, local_part, local_n, mpi_part, 0, MPI_COMM_WORLD);
+
+    // Broadcast fields
+    int emf_cells = emf->nx + emf->gc[0] + emf->gc[1];
+    MPI_Bcast(emf->E_buf, emf_cells * 3, MPI_FLOAT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(emf->B_buf, emf_cells * 3, MPI_FLOAT, 0, MPI_COMM_WORLD);
+
     double energy_local = 0.0;
-    const int nx0 = spec->rank_nx;
+    const int nx0 = spec -> nx;
     const float tem   = 0.5 * spec->dt/spec -> m_q;
     const float dt_dx = spec->dt / spec->dx;
-
-    // Auxiliary values for current deposition
     const float qnx = spec -> q *  spec->dx / spec->dt;
     
-    // Advance particles in local domain
-    for (int i=0; i<spec->np; i++) {
+    // Advance local particles
+    for (int i=0; i<local_n; i++) {
 
-        t_part *p = &spec->part[i];
+        t_part *p = &local_part[i];
 
         float3 Ep, Bp;
         float utx, uty, utz;
         float ux, uy, uz, u2;
         float gamma, rg, gtem, otsq;
-
         float x1;
-
         int di;
         float dx;
 
-        // Load particle momenta
         ux = p->ux;
         uy = p->uy;
         uz = p->uz;
 
-        // interpolate fields
         interpolate_fld( emf -> E_part, emf -> B_part, p, &Ep, &Bp );
 
-        // advance u using Boris scheme
         Ep.x *= tem;
         Ep.y *= tem;
         Ep.z *= tem;
@@ -1008,12 +1006,9 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
         uty = uy + Ep.y;
         utz = uz + Ep.z;
 
-        // Perform first half of the rotation
-        // Get time centered gamma
         u2 = utx*utx + uty*uty + utz*utz;
         gamma = sqrtf( 1 + u2 );
 
-        // Accumulate time centered energy
         energy_local += u2 / ( 1 + gamma );
 
         gtem = tem / gamma;
@@ -1028,8 +1023,6 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
         uy = uty + utz*Bp.x - utx*Bp.z;
         uz = utz + utx*Bp.y - uty*Bp.x;
 
-        // Perform second half of the rotation
-
         Bp.x *= otsq;
         Bp.y *= otsq;
         Bp.z *= otsq;
@@ -1038,17 +1031,14 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
         uty += uz*Bp.x - ux*Bp.z;
         utz += ux*Bp.y - uy*Bp.x;
 
-        // Perform second half of electric field acceleration
         ux = utx + Ep.x;
         uy = uty + Ep.y;
         uz = utz + Ep.z;
 
-        // Store new momenta
         p->ux = ux;
         p->uy = uy;
         p->uz = uz;
 
-        // push particle
         rg = 1.0f / sqrtf(1.0f + ux*ux + uy*uy + uz*uz);
 
         dx = dt_dx * rg * ux;
@@ -1062,193 +1052,80 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
         float qvy = spec->q * uy * rg;
         float qvz = spec->q * uz * rg;
 
-        // deposit current using Eskirepov method
-        // dep_current_esk( spec -> part[i].ix, di,
-        // 				 spec -> part[i].x, x1,
-        // 				 qnx, qvy, qvz,
-        // 				 current );
-        dep_current_zamb( p->ix, di,
-                    p->x, dx,
-                            qnx, qvy, qvz,
-                            current );
+        dep_current_zamb( p->ix, di, p->x, dx, qnx, qvy, qvz, current );
 
-        // Store results
         p->x = x1;
         p->ix += di;
     }
 
-    // Reduce energy across all ranks
+    // Reduce energy
     double energy_total = 0.0;
-    MPI_Allreduce(&energy_local, &energy_total, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-    spec -> energy = spec-> q * spec -> m_q * energy_total * spec -> dx;
+    MPI_Reduce(&energy_local, &energy_total, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 
-    // Exchange current guard cells with neighbors
-    // Current grid has guard cells: J[0] is first guard, J[gc[0]] is first real cell
-    int gc_left = current->gc[0];
-    int gc_right = current->gc[1];
+    // Sum current explicitly (not IN_PLACE to avoid issues)
+    int jlen = (current->gc[0] + current->nx + current->gc[1]) * 3;
+    float *current_sum = malloc(jlen * sizeof(float));
+    MPI_Reduce(current->J_buf, current_sum, jlen, MPI_FLOAT, MPI_SUM, 0, MPI_COMM_WORLD);
     
-    if (spec->rank_left >= 0) {
-        // Send leftmost real cell to left neighbor, receive into left guard cell
-        MPI_Sendrecv(&current->J[gc_left], 3, MPI_FLOAT, spec->rank_left, 0,
-                     &current->J[gc_left - 1], 3, MPI_FLOAT, spec->rank_left, 0,
-                     MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    // Root updates current
+    if (rank == 0) {
+        memcpy(current->J_buf, current_sum, jlen * sizeof(float));
     }
-    if (spec->rank_right >= 0) {
-        // Send rightmost real cell to right neighbor, receive into right guard cell
-        MPI_Sendrecv(&current->J[gc_left + nx0 - 1], 3, MPI_FLOAT, spec->rank_right, 0,
-                     &current->J[gc_left + nx0], 3, MPI_FLOAT, spec->rank_right, 0,
-                     MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    }
+    free(current_sum);
 
-    if (dbg) {
-        double local_j_sum = 0.0;
-        for (int j = 0; j < (current->gc[0] + current->nx + current->gc[1]) * 3; j++) 
-            local_j_sum += ((float*)current->J_buf)[j];
-        double global_j_sum = 0.0;
-        MPI_Allreduce(&local_j_sum, &global_j_sum, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-        if (rank == 0)
-            fprintf(stderr, "[MPI dbg] rank=%d current_sum=%e\n", rank, global_j_sum);
+    if (dbg && rank == 0) {
+        double j_sum = 0.0;
+        for (int j = 0; j < jlen; j++) j_sum += ((float*)current->J_buf)[j];
+        fprintf(stderr, "[MPI dbg] rank=%d current_sum=%e\n", rank, j_sum);
     }
 
-    // Handle particle boundary conditions and domain transfers
-    spec -> iter += 1;
+    // Gather particles
+    MPI_Gatherv(local_part, local_n, mpi_part, spec->part, counts, displs, mpi_part, 0, MPI_COMM_WORLD);
 
-    // Lists for particles leaving domain
-    int *send_left = malloc(spec->np * sizeof(int));
-    int *send_right = malloc(spec->np * sizeof(int));
-    int n_left = 0, n_right = 0;
+    // Root finalizes
+    if (rank == 0) {
+        spec -> energy = spec-> q * spec -> m_q * energy_total * spec -> dx;
+        spec -> iter += 1;
 
-    if ( spec -> moving_window || spec -> bc_type == PART_BC_OPEN ){
+        if ( spec -> moving_window || spec -> bc_type == PART_BC_OPEN ){
+            if (spec -> moving_window ) spec_move_window( spec );
 
-        if (spec -> moving_window ) spec_move_window( spec );
-
-        // Check which particles leave the local domain
-        int i = 0;
-        while ( i < spec -> np ) {
-            if ( spec -> part[i].ix < 0 ) {
-                // Particle moved to left neighbor
-                if (spec->rank_left >= 0) {
-                    send_left[n_left++] = i;
-                    i++;
-                } else {
-                    // No left neighbor, remove particle
+            int i = 0;
+            while ( i < spec -> np ) {
+                if (( spec -> part[i].ix < 0 ) || ( spec -> part[i].ix >= nx0 )) {
                     spec -> part[i] = spec -> part[ -- spec -> np ];
+                    continue;
                 }
-            } else if ( spec -> part[i].ix >= nx0 ) {
-                // Particle moved to right neighbor
-                if (spec->rank_right >= 0) {
-                    send_right[n_right++] = i;
-                    i++;
-                } else {
-                    // No right neighbor, remove particle
-                    spec -> part[i] = spec -> part[ -- spec -> np ];
-                }
-            } else {
                 i++;
             }
-        }
-
-    } else {
-        // Periodic boundaries within local domain
-        for (int i=0; i<spec->np; i++) {
-            if (spec -> part[i].ix < 0) {
-                if (spec->rank_left >= 0) {
-                    send_left[n_left++] = i;
-                } else {
-                    // Wrap around locally (leftmost rank)
-                    spec -> part[i].ix += nx0;
-                }
-            } else if (spec -> part[i].ix >= nx0) {
-                if (spec->rank_right >= 0) {
-                    send_right[n_right++] = i;
-                } else {
-                    // Wrap around locally (rightmost rank)
-                    spec -> part[i].ix -= nx0;
-                }
+        } else {
+            for (int i=0; i<spec->np; i++) {
+                spec -> part[i].ix += (( spec -> part[i].ix < 0 ) ? nx0 : 0 ) - (( spec -> part[i].ix >= nx0 ) ? nx0 : 0);
             }
         }
+
+        if ( spec -> n_sort > 0 ) {
+            if ( ! (spec -> iter % spec -> n_sort) ) spec_sort( spec );
+        }
+
+        _spec_npush += spec -> np;
+        _spec_time += timer_interval_seconds( t0, timer_ticks() );
     }
 
-    // Exchange particle counts
-    int recv_left_count = 0, recv_right_count = 0;
-    if (spec->rank_left >= 0) {
-        MPI_Sendrecv(&n_left, 1, MPI_INT, spec->rank_left, 1,
-                     &recv_right_count, 1, MPI_INT, spec->rank_left, 1,
-                     MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    }
-    if (spec->rank_right >= 0) {
-        MPI_Sendrecv(&n_right, 1, MPI_INT, spec->rank_right, 2,
-                     &recv_left_count, 1, MPI_INT, spec->rank_right, 2,
-                     MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    }
+    // Broadcast updated state
+    MPI_Bcast(&spec->np, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&spec->iter, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&spec->n_move, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
-    // Prepare send buffers
-    t_part *buf_left = (n_left > 0) ? malloc(n_left * sizeof(t_part)) : NULL;
-    t_part *buf_right = (n_right > 0) ? malloc(n_right * sizeof(t_part)) : NULL;
-    
-    for (int i = 0; i < n_left; i++) {
-        buf_left[i] = spec->part[send_left[i]];
-        // Adjust cell index for neighbor's coordinate system
-        buf_left[i].ix += nx0;
+    if (rank != 0) {
+        spec_grow_buffer(spec, spec->np);
     }
-    for (int i = 0; i < n_right; i++) {
-        buf_right[i] = spec->part[send_right[i]];
-        // Adjust cell index for neighbor's coordinate system
-        buf_right[i].ix -= nx0;
-    }
+    MPI_Bcast(spec->part, spec->np, mpi_part, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&spec->energy, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
-    // Allocate space for incoming particles
-    int new_np = spec->np - n_left - n_right + recv_left_count + recv_right_count;
-    spec_grow_buffer(spec, new_np);
-
-    t_part *recv_left_buf = (recv_left_count > 0) ? malloc(recv_left_count * sizeof(t_part)) : NULL;
-    t_part *recv_right_buf = (recv_right_count > 0) ? malloc(recv_right_count * sizeof(t_part)) : NULL;
-
-    // Exchange particles
-    if (spec->rank_left >= 0 && (n_left > 0 || recv_right_count > 0)) {
-        MPI_Sendrecv(buf_left, n_left, mpi_part, spec->rank_left, 3,
-                     recv_right_buf, recv_right_count, mpi_part, spec->rank_left, 3,
-                     MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    }
-    if (spec->rank_right >= 0 && (n_right > 0 || recv_left_count > 0)) {
-        MPI_Sendrecv(buf_right, n_right, mpi_part, spec->rank_right, 4,
-                     recv_left_buf, recv_left_count, mpi_part, spec->rank_right, 4,
-                     MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    }
-
-    // Remove sent particles from local array (backwards to preserve indices)
-    for (int i = n_right - 1; i >= 0; i--) {
-        int idx = send_right[i];
-        spec->part[idx] = spec->part[--spec->np];
-    }
-    for (int i = n_left - 1; i >= 0; i--) {
-        int idx = send_left[i];
-        spec->part[idx] = spec->part[--spec->np];
-    }
-
-    // Add received particles
-    for (int i = 0; i < recv_left_count; i++) {
-        spec->part[spec->np++] = recv_left_buf[i];
-    }
-    for (int i = 0; i < recv_right_count; i++) {
-        spec->part[spec->np++] = recv_right_buf[i];
-    }
-
-    // Cleanup
-    free(send_left);
-    free(send_right);
-    free(buf_left);
-    free(buf_right);
-    free(recv_left_buf);
-    free(recv_right_buf);
-
-    if ( spec -> n_sort > 0 ) {
-        if ( ! (spec -> iter % spec -> n_sort) ) spec_sort( spec );
-    }
-
-    _spec_npush += spec -> np;
-    _spec_time += timer_interval_seconds( t0, timer_ticks() );
-
+    free(local_part);
+    free(counts);
+    free(displs);
     MPI_Type_free(&mpi_part);
 }
 
