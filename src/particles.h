@@ -132,6 +132,12 @@ typedef struct Species {
 	/// Sorting frequency
 	int n_sort;
 
+	// MPI spatial decomposition
+	int rank_nx;		///< Number of cells in this rank's domain
+	int rank_start;		///< Global cell index where this rank's domain starts
+	int rank_left;		///< Left neighbor rank (-1 if none)
+	int rank_right;		///< Right neighbor rank (-1 if none)
+
 } t_species;
 
 /**
