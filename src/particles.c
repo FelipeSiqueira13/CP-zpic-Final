@@ -25,6 +25,10 @@
 #include "zdf.h"
 #include "timer.h"
 
+// Sanity checks for MPI packing assumptions
+_Static_assert(sizeof(float3) == 3 * sizeof(float), "float3 must be exactly 3 floats");
+_Static_assert(offsetof(t_part, uz) + sizeof(float) == sizeof(t_part), "t_part must be tightly packed (ix,x,ux,uy,uz)");
+
 static double _spec_time = 0.0;
 static uint64_t _spec_npush = 0;
 
@@ -931,6 +935,11 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
     MPI_Type_create_struct(5, blocklen, disp, types, &mpi_part);
     MPI_Type_commit(&mpi_part);
 
+    // Datatype for float3 (contiguous 3 floats)
+    MPI_Datatype mpi_f3;
+    MPI_Type_contiguous(3, MPI_FLOAT, &mpi_f3);
+    MPI_Type_commit(&mpi_f3);
+
     // Broadcast scalar state to all ranks
     int np_root = spec->np;
     MPI_Bcast(&np_root, 1, MPI_INT, 0, MPI_COMM_WORLD);
@@ -1086,8 +1095,8 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
     MPI_Reduce(&energy_local, &energy_total, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 
     // Sum current across ranks
-    int jlen = (current->gc[0] + current->nx + current->gc[1]) * 3;
-    MPI_Allreduce(MPI_IN_PLACE, current->J_buf, jlen, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+    int jcells = current->gc[0] + current->nx + current->gc[1];
+    MPI_Allreduce(MPI_IN_PLACE, current->J_buf, jcells, mpi_f3, MPI_SUM, MPI_COMM_WORLD);
 
     // Gather particles back to root
     MPI_Gatherv(local_part, local_n, mpi_part, spec->part , counts, displs, mpi_part, 0, MPI_COMM_WORLD);
@@ -1140,6 +1149,7 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
     free(counts);
     free(displs);
     MPI_Type_free(&mpi_part);
+    MPI_Type_free(&mpi_f3);
 }
 
 /*********************************************************************************************
