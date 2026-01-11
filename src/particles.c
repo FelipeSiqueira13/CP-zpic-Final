@@ -570,20 +570,7 @@ void spec_new( t_species* spec, char name[], const float m_q, const int ppc,
     spec -> moving_window = 0;
     spec -> n_move = 0;
 
-    // Inject initial particle distribution
-    spec -> np = 0;
-
-    const int range[2] = {0, nx-1};
-
-    spec_inject_particles( spec, range );
-
-    // Set default sorting frequency
-    spec -> n_sort = 100000;
-
-    // Default to periodic boundary condtions
-    spec -> bc_type = PART_BC_PERIODIC;
-
-    // Initialize MPI spatial decomposition info
+    // Initialize MPI spatial decomposition info BEFORE particle injection
     int rank = 0, size = 1;
     MPI_Comm_rank( MPI_COMM_WORLD, &rank );
     MPI_Comm_size( MPI_COMM_WORLD, &size );
@@ -604,6 +591,25 @@ void spec_new( t_species* spec, char name[], const float m_q, const int ppc,
     // Set neighbor ranks
     spec->rank_left = (rank > 0) ? rank - 1 : -1;
     spec->rank_right = (rank < size - 1) ? rank + 1 : -1;
+
+    // Inject initial particle distribution in LOCAL domain only
+    spec -> np = 0;
+
+    // Each rank injects only in its local domain (in global coordinates)
+    const int range[2] = {spec->rank_start, spec->rank_start + spec->rank_nx - 1};
+
+    spec_inject_particles( spec, range );
+
+    // Convert particle positions to local coordinates (relative to rank domain)
+    for (int i = 0; i < spec->np; i++) {
+        spec->part[i].ix -= spec->rank_start;
+    }
+
+    // Set default sorting frequency
+    spec -> n_sort = 100000;
+
+    // Default to periodic boundary condtions
+    spec -> bc_type = PART_BC_PERIODIC;
 
 }
 
@@ -1071,23 +1077,26 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
         p->ix += di;
     }
 
-    // Reduce energy
+    // Reduce energy across all ranks
     double energy_total = 0.0;
     MPI_Allreduce(&energy_local, &energy_total, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
     spec -> energy = spec-> q * spec -> m_q * energy_total * spec -> dx;
 
     // Exchange current guard cells with neighbors
-    int jlen = 3; // float3 has 3 components
+    // Current grid has guard cells: J[0] is first guard, J[gc[0]] is first real cell
+    int gc_left = current->gc[0];
+    int gc_right = current->gc[1];
+    
     if (spec->rank_left >= 0) {
-        // Send leftmost cell to left neighbor, receive into left guard cell
-        MPI_Sendrecv(&current->J[0], jlen, MPI_FLOAT, spec->rank_left, 0,
-                     &current->J[-1], jlen, MPI_FLOAT, spec->rank_left, 0,
+        // Send leftmost real cell to left neighbor, receive into left guard cell
+        MPI_Sendrecv(&current->J[gc_left], 3, MPI_FLOAT, spec->rank_left, 0,
+                     &current->J[gc_left - 1], 3, MPI_FLOAT, spec->rank_left, 0,
                      MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     }
     if (spec->rank_right >= 0) {
-        // Send rightmost cell to right neighbor, receive into right guard cell
-        MPI_Sendrecv(&current->J[nx0-1], jlen, MPI_FLOAT, spec->rank_right, 0,
-                     &current->J[nx0], jlen, MPI_FLOAT, spec->rank_right, 0,
+        // Send rightmost real cell to right neighbor, receive into right guard cell
+        MPI_Sendrecv(&current->J[gc_left + nx0 - 1], 3, MPI_FLOAT, spec->rank_right, 0,
+                     &current->J[gc_left + nx0], 3, MPI_FLOAT, spec->rank_right, 0,
                      MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     }
 
