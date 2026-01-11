@@ -918,10 +918,12 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
     MPI_Comm_rank( MPI_COMM_WORLD, &rank );
     MPI_Comm_size( MPI_COMM_WORLD, &size );
 
-    /* Debug flag controlled by env var MPI_DEBUG=1 */
-    int dbg = 0;
+    /* Debug flag controlled by env var MPI_DEBUG=1; must be consistent across ranks */
+    int dbg_local = 0;
     const char* dbg_env = getenv("MPI_DEBUG");
-    if (dbg_env && dbg_env[0] == '1') dbg = 1;
+    if (dbg_env && dbg_env[0] == '1') dbg_local = 1;
+    int dbg = 0;
+    MPI_Allreduce(&dbg_local, &dbg, 1, MPI_INT, MPI_LOR, MPI_COMM_WORLD);
 
     // Datatype for particle (contiguous fields only)
     MPI_Datatype mpi_part;
