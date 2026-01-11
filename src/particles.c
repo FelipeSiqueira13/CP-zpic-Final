@@ -1102,16 +1102,12 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
     double energy_total = 0.0;
     MPI_Reduce(&energy_local, &energy_total, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 
-    // Sum current across ranks
-    int jlen = (current->gc[0] + current->nx + current->gc[1]) * 3;
-    MPI_Allreduce(MPI_IN_PLACE, current->J_buf, jlen, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
-
+    // Debug: show local current sum before reduction (will be done in sim_iter)
     if (dbg) {
+        int jlen = (current->gc[0] + current->nx + current->gc[1]) * 3;
         double local_j_sum = 0.0;
         for (int j = 0; j < jlen; j++) local_j_sum += ((float*)current->J_buf)[j];
-        double global_j_sum = 0.0;
-        MPI_Allreduce(&local_j_sum, &global_j_sum, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-        fprintf(stderr, "[MPI dbg] rank=%d current_sum=%e\n", rank, global_j_sum);
+        fprintf(stderr, "[MPI dbg] rank=%d local_current_sum=%e\n", rank, local_j_sum);
     }
 
     // Gather particles back to root

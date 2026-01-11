@@ -48,6 +48,10 @@ void sim_iter( t_simulation* sim) {
 	for (int i = 0; i<sim -> n_species; i++)
 		spec_advance(&sim -> species[i], &sim -> emf, &sim -> current);
 
+	// Sum current across all MPI ranks (after all species have deposited)
+	int jlen = (sim->current.gc[0] + sim->current.nx + sim->current.gc[1]) * 3;
+	MPI_Allreduce(MPI_IN_PLACE, sim->current.J_buf, jlen, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+
 	// Update current boundary conditions and advance iteration
 	current_update( &sim -> current );
 
