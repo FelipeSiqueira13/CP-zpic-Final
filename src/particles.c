@@ -25,6 +25,10 @@
 #include "zdf.h"
 #include "timer.h"
 
+// Sanity checks for MPI packing assumptions
+_Static_assert(sizeof(float3) == 3 * sizeof(float), "float3 must be exactly 3 floats");
+_Static_assert(offsetof(t_part, uz) + sizeof(float) == sizeof(t_part), "t_part must be tightly packed (ix,x,ux,uy,uz)");
+
 static double _spec_time = 0.0;
 static uint64_t _spec_npush = 0;
 
@@ -918,11 +922,6 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
     MPI_Comm_rank( MPI_COMM_WORLD, &rank );
     MPI_Comm_size( MPI_COMM_WORLD, &size );
 
-    /* Debug flag controlled by env var MPI_DEBUG=1 */
-    int dbg = 0;
-    const char* dbg_env = getenv("MPI_DEBUG");
-    if (dbg_env && dbg_env[0] == '1') dbg = 1;
-
     // Datatype for particle (contiguous fields only)
     MPI_Datatype mpi_part;
     int blocklen[5] = {1,1,1,1,1};
@@ -936,15 +935,16 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
     MPI_Type_create_struct(5, blocklen, disp, types, &mpi_part);
     MPI_Type_commit(&mpi_part);
 
+    // Datatype for float3 (contiguous 3 floats)
+    MPI_Datatype mpi_f3;
+    MPI_Type_contiguous(3, MPI_FLOAT, &mpi_f3);
+    MPI_Type_commit(&mpi_f3);
+
     // Broadcast scalar state to all ranks
     int np_root = spec->np;
     MPI_Bcast(&np_root, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&spec->iter, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&spec->n_move, 1, MPI_INT, 0, MPI_COMM_WORLD);
-
-    if (dbg && rank == 0) {
-        fprintf(stderr, "[MPI dbg] np_root=%d iter=%d n_move=%d size=%d\n", np_root, spec->iter, spec->n_move, size);
-    }
 
     // Ensure buffers on non-root are big enough
     if (rank != 0) {
@@ -969,14 +969,6 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
 
     // Scatter particles (root sends, others receive)
     MPI_Scatterv(spec->part, counts, displs, mpi_part, local_part, local_n, mpi_part, 0, MPI_COMM_WORLD);
-
-    if (dbg) {
-        double local_x_sum = 0.0;
-        for (int i = 0; i < local_n; i++) local_x_sum += local_part[i].x;
-        double global_x_sum = 0.0;
-        MPI_Allreduce(&local_x_sum, &global_x_sum, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-        fprintf(stderr, "[MPI dbg] rank=%d local_n=%d gx_sum=%e\n", rank, local_n, global_x_sum);
-    }
 
     // Broadcast field buffers (contiguous float3 arrays)
     int emf_cells = emf->nx + emf->gc[0] + emf->gc[1];
@@ -1103,16 +1095,8 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
     MPI_Reduce(&energy_local, &energy_total, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 
     // Sum current across ranks
-    int jlen = (current->gc[0] + current->nx + current->gc[1]) * 3;
-    MPI_Allreduce(MPI_IN_PLACE, current->J_buf, jlen, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
-
-    if (dbg) {
-        double local_j_sum = 0.0;
-        for (int j = 0; j < jlen; j++) local_j_sum += ((float*)current->J_buf)[j];
-        double global_j_sum = 0.0;
-        MPI_Allreduce(&local_j_sum, &global_j_sum, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-        fprintf(stderr, "[MPI dbg] rank=%d current_sum=%e\n", rank, global_j_sum);
-    }
+    int jcells = current->gc[0] + current->nx + current->gc[1];
+    MPI_Allreduce(MPI_IN_PLACE, current->J_buf, jcells, mpi_f3, MPI_SUM, MPI_COMM_WORLD);
 
     // Gather particles back to root
     MPI_Gatherv(local_part, local_n, mpi_part, spec->part , counts, displs, mpi_part, 0, MPI_COMM_WORLD);
@@ -1165,6 +1149,7 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
     free(counts);
     free(displs);
     MPI_Type_free(&mpi_part);
+    MPI_Type_free(&mpi_f3);
 }
 
 /*********************************************************************************************
