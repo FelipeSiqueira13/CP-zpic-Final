@@ -914,10 +914,9 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
 
     // Guarantee MPI initialized (kept inside this function as requested)
     int was_init = 0;
-    MPI_Initialized(&was_init);
-    if (!was_init) {
-        MPI_Init(NULL, NULL);
-    }
+
+    MPI_Init(NULL, NULL);
+
 
     int rank = 0, size = 1;
     MPI_Comm_rank( MPI_COMM_WORLD, &rank );
@@ -1146,6 +1145,7 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current)
     free(counts);
     free(displs);
     MPI_Type_free(&mpi_part);
+    MPI_Finalize();
 }
 
 /*********************************************************************************************
