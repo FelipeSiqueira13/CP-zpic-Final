@@ -7,4 +7,4 @@
 #SBATCH --error=slurm-%j.err
 
 # Run
-mpirun -np 2 ./zpic
+srun ./zpic
