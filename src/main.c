@@ -69,7 +69,7 @@ int main (int argc, char * argv[]) {
         }
 	}
     printf("n = %i, t = %f\n",n,t);
-
+    
 	t1 = timer_ticks();
 	fprintf(stderr, "\nSimulation ended.\n\n");
     sim_report_energy( &sim );
