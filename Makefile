@@ -1,6 +1,6 @@
 # GCC options
 CC = mpicc
-CFLAGS = -Ofast -g -std=c99 -pedantic -Wall
+CFLAGS = -O3 -ffast-math -g -std=c99 -pedantic -Wall -fno-omit-frame-pointer
 #CFLAGS = -Kfast -std=c99 
 LDFLAGS = -lm
 
@@ -22,32 +22,32 @@ SOURCE = current.c emf.c particles.c random.c timer.c main.c simulation.c zdf.c
 
 TARGET = zpic
 
-DOCSBASE = docs
+DOCSBASE = ../docs
+
+SBATCH_FILE = mpi.sh
 
 DOCS = $(DOCSBASE)/html/index.html
 
 OBJ = $(SOURCE:.c=.o)
 
-# Number of MPI processes for the run target (override with `make run NP=<n>`)
-NP ?= 4
-
-all : $(SOURCE) $(TARGET)
+all : $(TARGET)
 
 docs : $(DOCS)
 
 $(TARGET) : $(OBJ)
-	$(CC) $(CFLAGS) $(OBJ) $(LDFLAGS) -o $@
+    $(CC) $(CFLAGS) $(OBJ) $(LDFLAGS) -o $@
 
 .c.o:
-	$(CC) -c $(CFLAGS) $< -o $@
+    $(CC) -c $(CFLAGS) $< -o $@
 
 $(DOCS) : $(SOURCE)
-	@doxygen ./Doxyfile
+    @doxygen ./Doxyfile
+
+run: ./$(TARGET)
+    sbatch $(SBATCH_FILE)
 
 clean:
-	@touch $(TARGET) $(OBJ)
-	rm -f $(TARGET) $(OBJ)
-	rm -rf $(DOCSBASE)
-
-run: all
-	mpirun -np $(NP) ./zpic
+    @touch $(TARGET) $(OBJ)
+    rm -f $(TARGET) $(OBJ) slurm-*.out slurm-*.err
+    rm -f $(TARGET) $(OBJ)
+    rm -rf $(DOCSBASE)
