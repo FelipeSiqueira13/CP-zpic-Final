@@ -905,29 +905,39 @@ void interpolate_fld( const float3* restrict const E, const float3* restrict con
  * @param emf       EM fields
  * @param current   Current density
  */
-void spec_advance( t_species* spec, t_emf* emf, t_current* current, int *argc, char *** argv)
+void spec_advance( t_species* spec, t_emf* emf, t_current* current)
 {
 
     uint64_t t0;
     t0 = timer_ticks();
 
+    
+    
+    double energy = 0;
+    int rank, size;
+    MPI_Status status;
+    MPI_Init(NULL, NULL);
+    MPI_Comm_rank( MPI_COMM_WORLD, &rank );
+    MPI_Comm_size( MPI_COMM_WORLD, &size ); 
+    MPI_Bcast(spec, sizeof(t_species), MPI_BYTE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(emf, sizeof(t_emf), MPI_BYTE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(current, sizeof(t_current), MPI_BYTE, 0, MPI_COMM_WORLD);
+    int div = spec->np / size;
+    int rem = spec->np % size;
+    if (rank == size -1){
+        div += rem;
+    }
+    double energysum = 0;
+    
+    const int nx0 = spec -> nx;
     const float tem   = 0.5 * spec->dt/spec -> m_q;
     const float dt_dx = spec->dt / spec->dx;
 
     // Auxiliary values for current deposition
     const float qnx = spec -> q *  spec->dx / spec->dt;
-
-    const int nx0 = spec -> nx;
-
-    double energy = 0;
-    double energysum = 0;
-    int rank, size;
-    MPI_Status status;
-    MPI_Init(argc, argv);
-    MPI_Comm_rank( MPI_COMM_WORLD, &rank );
-    MPI_Comm_size( MPI_COMM_WORLD, &size ); 
+    
     // Advance particles
-    for (int i=rank; i<spec->np; i+=size) {
+    for (int i=rank*div; i<(rank+1)*div; i++) {
 
         float3 Ep, Bp;
         float utx, uty, utz;
@@ -1016,26 +1026,21 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current, int *argc, c
         // 				 spec -> part[i].x, x1,
         // 				 qnx, qvy, qvz,
         // 				 current );
-
+        //Felipe Current
         dep_current_zamb( spec -> part[i].ix, di,
                             spec -> part[i].x, dx,
                             qnx, qvy, qvz,
                             current );
 
         // Store results
+        //Felipe
         spec -> part[i].x = x1;
         spec -> part[i].ix += di;
         energysum += energy;
     }
-    if(rank == 0){
-        energy = energysum;
-        for(int i=1;i<=size;i++){
-            MPI_Recv( &energysum, 1, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &status );
-            energy += energysum;
-        }
-    }else{
-        MPI_Send( &energysum, 1, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
-    }
+    MPI_Reduce(energysum,energy,1,MPI_DOUBLE,MPI_SUM,0,MPI_COMM_WORLD);
+    MPI_Scatter(spec->part, sizeof(t_part)*spec->np, MPI_BYTE, spec->part, sizeof(t_part)*spec->np, MPI_BYTE, 0, MPI_COMM_WORLD);
+    MPI_Scatter(current, sizeof(t_current), MPI_BYTE, current, sizeof(t_current), MPI_BYTE, 0, MPI_COMM_WORLD);
     MPI_Finalize();
 
     // Store energy
