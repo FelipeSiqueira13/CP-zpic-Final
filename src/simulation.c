@@ -69,15 +69,15 @@ void sim_iter( t_simulation* sim) {
  */
 void sim_timings( t_simulation* sim, uint64_t t0, uint64_t t1 ){
 
-	fprintf(stderr, "Time for spec. advance = %f s\n", spec_time());
-	fprintf(stderr, "Time for emf   advance = %f s\n", emf_time());
-	fprintf(stderr, "Total simulation time  = %f s\n", timer_interval_seconds(t0, t1));
-	fprintf(stderr, "\n");
+	printf("Time for spec. advance = %f s\n", spec_time());
+	printf("Time for emf   advance = %f s\n", emf_time());
+	printf("Total simulation time  = %f s\n", timer_interval_seconds(t0, t1));
+	printf("\n");
 
 	double perf = spec_perf();
 	if ( perf > 0 ) {
-		fprintf(stderr, "Particle advance [nsec/part] = %f \n", 1.e9*perf);
-		fprintf(stderr, "Particle advance [Mpart/sec] = %f \n", 1.e-6/perf);
+		printf("Particle advance [nsec/part] = %f \n", 1.e9*perf);
+		printf("Particle advance [Mpart/sec] = %f \n", 1.e-6/perf);
 	}
 }
 
@@ -185,6 +185,7 @@ void sim_report_energy( t_simulation* sim )
 {
 	int i;
 
+	
 	double emf_energy[6];
 	double part_energy[ sim -> n_species ];
 
@@ -200,6 +201,9 @@ void sim_report_energy( t_simulation* sim )
 		tot_part += part_energy[i];
 	}
 
+	int rank = 0;
+	MPI_Comm_rank( MPI_COMM_WORLD, &rank );
+	if (rank != 0) return;
 	printf("Energy (fields | particles | total) = %e %e %e\n",
 		tot_emf, tot_part, tot_emf+tot_part);
 

@@ -79,10 +79,14 @@ int main (int argc, char * argv[]) {
     }
 
     t1 = timer_ticks();
-    fprintf(stderr, "\nSimulation ended.\n\n");
+    if (rank == 0) {
+        fprintf(stderr, "\nSimulation ended.\n\n");
+    }
     sim_report_energy( &sim );
     sim_report_energy_ret( &sim, &en_out );
-    printf("Initial energy: %e, Final energy: %e\n", en_in, en_out);
+    if (rank == 0) {
+        printf("Initial energy: %e, Final energy: %e\n", en_in, en_out);
+    }
     double ratio=100*fabs((en_in-en_out)/en_out);
 
     int err_flag = 0;
