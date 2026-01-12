@@ -1,10 +1,8 @@
-#!/bin/bash
-# Submit one SLURM job per task count from 1 to 32.
-# Overrides the --ntasks directive in mpi.sh via sbatch CLI.
+# bash submit_sweep.sh
+
 
 set -euo pipefail
 
-# Run from script directory so mpi.sh is found
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
