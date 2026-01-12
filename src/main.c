@@ -80,7 +80,7 @@ int main (int argc, char * argv[]) {
 
     t1 = timer_ticks();
     if (rank == 0) {
-        fprintf(stderr, "\nSimulation ended.\n\n");
+        printf("\nSimulation ended.\n\n");
     }
     sim_report_energy( &sim );
     sim_report_energy_ret( &sim, &en_out );
