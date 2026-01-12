@@ -35,19 +35,19 @@ all : $(TARGET)
 docs : $(DOCS)
 
 $(TARGET) : $(OBJ)
-    $(CC) $(CFLAGS) $(OBJ) $(LDFLAGS) -o $@
+        $(CC) $(CFLAGS) $(OBJ) $(LDFLAGS) -o $@
 
 .c.o:
-    $(CC) -c $(CFLAGS) $< -o $@
+        $(CC) -c $(CFLAGS) $< -o $@
 
 $(DOCS) : $(SOURCE)
-    @doxygen ./Doxyfile
+        @doxygen ./Doxyfile
 
 run: ./$(TARGET)
-    sbatch $(SBATCH_FILE)
+        sbatch $(SBATCH_FILE)
 
 clean:
-    @touch $(TARGET) $(OBJ)
-    rm -f $(TARGET) $(OBJ) slurm-*.out slurm-*.err
-    rm -f $(TARGET) $(OBJ)
-    rm -rf $(DOCSBASE)
+        @touch $(TARGET) $(OBJ)
+        rm -f $(TARGET) $(OBJ) slurm-*.out slurm-*.err
+        rm -f $(TARGET) $(OBJ)
+        rm -rf $(DOCSBASE)
