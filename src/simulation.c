@@ -45,6 +45,8 @@ int report( int n, int ndump )
  */
 void sim_iter( t_simulation* sim) {
 	// Advance particles and deposit current
+	int rank;
+	MPI_Comm_rank( MPI_COMM_WORLD, &rank );
 	current_zero( &sim -> current );
 	for (int i = 0; i<sim -> n_species; i++)
 		spec_advance(&sim -> species[i], &sim -> emf, &sim -> current);
@@ -52,7 +54,7 @@ void sim_iter( t_simulation* sim) {
 	// Sum current across all MPI ranks (after all species have deposited)
 	int jlen = (sim->current.gc[0] + sim->current.nx + sim->current.gc[1]) * 3;
 	MPI_Allreduce(MPI_IN_PLACE, sim->current.J_buf, jlen, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
-
+	if(rank != 0) return;
 	// Update current boundary conditions and advance iteration
 	current_update( &sim -> current );
 
